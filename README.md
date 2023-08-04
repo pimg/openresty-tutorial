@@ -71,3 +71,5 @@ This is an improvement, the response comes back with status `200` and indeed we 
 This is caused by the streaming event-loop based architeture of Nginx. In Nginx the headers are sent out before the body is sent out. Something that is also reflected in the order of the phases being executed. Where the `header-filter` phase is executed before the `body-filter` phase.
 
 To solve this move the `ngx.header...` from the `body-filter` phase to the `header-filter` phase and try again.
+
+*advanced* It might still be confusing on why the `body-filter` phase cannot change the response body. Some more information about the specifics of the body-filter phase and how it works can be found here: https://github.com/openresty/lua-nginx-module#body_filter_by_lua_block 
