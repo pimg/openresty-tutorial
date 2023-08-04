@@ -1,0 +1,1 @@
+ngx.log(ngx.WARN, "hello from the init phase") --init phase uses WARN as log level since the master process governing the log files is not fully initialized and not all log levels are available yet.

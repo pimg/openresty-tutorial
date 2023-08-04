@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dummy-api
+  namespace: api
+  labels:
+    name: dummy-api
+    app: dummy-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dummy-api
+  template:
+    metadata:
+      labels:
+        app: dummy-api
+    spec:
+      containers:
+        - image: tcr.paas.local:7001/tmac/dummy-api:latest
+          name: dummy-api
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            failureThreshold: 1
+            periodSeconds: 60
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            failureThreshold: 1
+            periodSeconds: 60
+      imagePullSecrets:
+      - name: tennet-private
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dummy-service
+  namespace: api
+spec:
+  ports:
+    - name: "default-http-port"
+      port: 8080
+      targetPort: 8080
+  selector:
+    app: dummy-api

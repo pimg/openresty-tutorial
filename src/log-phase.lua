@@ -1,0 +1,1 @@
+ngx.log(ngx.NOTICE, "hello from the log phase")
