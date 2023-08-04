@@ -151,4 +151,4 @@ function _M.generate_content()
 end
 ```
 
-THe module is now ready, start the Nginx server if not already running and invoke the endpoint.
+The module is now ready, start the Nginx server if not already running and invoke the endpoint.
