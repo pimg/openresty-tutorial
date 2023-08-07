@@ -152,3 +152,120 @@ end
 ```
 
 The module is now ready, start the Nginx server if not already running and invoke the endpoint.
+
+## Lesson 4 Kong Post function plugin tutorial
+The Kong Pre- and Post function plugins offer a good middleground for creating small customizations to the Kong gateway. 
+For this lesson we are going to use the `3scale-echo-api` as a backend. This API echoes back the response in a JSON format.
+When invoked with `GET https://echo-api.3scale.net` the following response body is returned:
+
+```json
+{
+  "method": "GET",
+  "path": "/",
+  "args": "",
+  "body": "",
+  "headers": {
+    "HTTP_VERSION": "HTTP/1.1",
+    "HTTP_HOST": "echo-api.3scale.net",
+    "HTTP_USER_AGENT": "curl/7.61.1",
+    "HTTP_ACCEPT": "*/*",
+    "HTTP_X_FORWARDED_FOR": "193.177.237.54",
+    "HTTP_X_FORWARDED_PROTO": "https",
+    "HTTP_X_ENVOY_EXTERNAL_ADDRESS": "193.177.237.54",
+    "HTTP_X_REQUEST_ID": "6b13b27b-2736-4130-973a-87a1e097ad19",
+    "HTTP_X_ENVOY_EXPECTED_RQ_TIMEOUT_MS": "15000"
+  },
+  "uuid": "25b78319-1f95-4d8b-aa7d-7ceb6ef7379f"
+}                                                                                                                                                          
+```
+
+### Prerequisite
+Before creating the custom plugin we need a Kong Route and Upstream to the echo service. Configuring a Route and Service in Kong is beyond the scope of this lesson.
+
+### Post function plugin
+
+For this lesson we are going to transform this body if the following manner:
+- When the response body contains the header: `"HTTP_CUSTOM": "Foo"` the response is changed to: `"HTTP_CUSTOM": "Bar"`
+- When to respoinse body does not contain this header or this header does not contain the value "Foo" the response is changed to `"HTTP_CUSTOM": "Baz"`
+- Add some breadcrumb logging to the Kong Log
+
+The first step is to retrieve the body response from the upstream. For this we can use a helper function of the Kong Plugin Development Kit.
+
+```lua
+local body = kong.response.get_raw_body()
+```
+
+Before we continue transforming the body, it is good practice to verify the retrieved body is not empty. This would also be a good place to add some debug logging.
+Opposed to the `ngx.Log` function we used in vanilla Openresty in Kong we'll use a Kong PDK helper function for logging.
+```lua
+if body ~= nil then
+    kong.log.debug(">>>>> Response body found, starting tranformation....")
+end
+```
+
+Now that we have a solid foundation we can create the transformation functionality of our plugin. To keep our plugin neet the transformation logic will live in a separate local function. 
+
+The first step is to import the `cjson` library since we are going to decode and encode JSON. At the top of the file add the require statement:
+```lua
+local cjson = require("cjson")
+```
+
+Below the require statement we can add the following function:
+```lua
+local function process_body(body) 
+    local decoded_body = cjson.decode(body)
+    local custom_header = decoded_body.headers.HTTP_CUSTOM
+    if custom_header ~= nil then
+        kong.log.debug(">>>>> Custom header is not nil")
+        if custom_header == "Foo" then
+            kong.log.debug(">>>>> Custom Header contains Foo")
+            decoded_body.headers.HTTP_CUSTOM = "Bar"
+        end
+    else
+        kong.log.debug(">>>>> Custom Header does not contain Foo: ", custom_header)
+        decoded_body.headers.HTTP_CUSTOM = "Baz"
+    end
+   return cjson.encode(decoded_body) 
+end
+```
+
+This function does the following:
+- decodes the body (which contains a JSON string) to a Lua table
+- retrieves the `Custom` header we issued in the request 
+- checks if the `Custom` header exists in our headers or not 
+- if the `Custom` header exists we check the value and if it is `Foo` we update it's value to `Bar`
+- if the `Custom` header does not exists or it's value does not equal `Foo` we update it's value to `Baz`
+- lastly we encode our Lua table back to a JSON string
+
+To use our function we need to call it. Update the if statement created earlier to the following:
+```lua
+if body ~= nil then
+    kong.log.debug(">>>>> Response body found, starting tranformation....")
+    local transformed_body = process_body(body)
+
+    kong.response.set_raw_body(transformed_body)
+end
+```
+
+Now our Lua code is ready, the next step is to add it to the Post function plugin. The Post function plugin allows Lua scripts in the various Nginx Phases. Since we are manipulating the response header from the upstream the appropriate phase seems to be `body filter`. 
+
+Add the Lua code to the `body filter` in the plugin and issue a request via Postman or Curl.
+
+### Troubleshooting
+Unfortunately this did not work.
+There are two "fixes" we need to implement in order to make this work:
+- Add cjson to the Lua Sandbox
+- Remove the `Content-Length` header
+
+Kong executes Lua for plugins using a protected sandbox. The `cjson` library, by default is not part of this sandbox. In order to have use `cjson` in our plugin we need to add `cjson` to the protected sandbox. This can be done by adding `cjson` to the following Kong environment variable: ` KONG_UNTRUSTED_LUA_SANDBOX_REQUIRES`.
+
+The `Content-Length` header in the HTTP response indicates the number of bytes of the response body being sent to the client. Since our plugin changes the response header the `Content-Length` no longer matches the response body being send to the client. This results in clients waiting for additional response chunks while the server no longer sends them. This results in clients waiting.
+
+Re-Calculating the `Content-Length` based on the new response body is unfortunately not possible. Remember the Nginx phases, where the `header-filter` phase is executed before the `body-filter` phase. And the response headers are send to the client before the response body. 
+
+To solve this issue we need to remove the `Content-Length` header all together. This can be achieved using a helper function from the Kong PDK.
+`kong.response.clear_header("Content-Length")`. However, this statement cannot simply be added to our existing code in the plugin, since this code is executed in the `body-filter` phase, whereas this statment needs to be included in the `header-filter` phase. 
+
+Add the statement: `kong.response.clear_header("Content-Length")` to the `header-filter` phase. 
+
+The plugin should work now.
